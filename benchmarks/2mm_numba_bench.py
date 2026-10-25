@@ -21,8 +21,11 @@ BLOCK_SIZE_L1 = 32
 
 # 2MM is defined as
 # D := alpha * A * B * C + beta * D, where alpha and beta are scalars, and A, B, C, D are matrices.
-# 1. temp = alpha * A * B
-# 2. D := temp * C + beta * D
+# 1. A' = alpha * A
+# 2. temp = A' * B
+# 3. D := temp * C + beta * D
+
+# total_flops = 4N^3 + 2N^2
 
 
 # ---------------------------------------------------------
@@ -31,14 +34,18 @@ BLOCK_SIZE_L1 = 32
 def _2mm_python_0(alpha, beta, A, B, C, D):
     n = A.shape[0]
     temp = np.zeros((n, n))
+    
+    # 2N^3 + N^2
     for i in range(n):
-        for j in range(n):
-            for k in range(n):
-                temp[i, j] += alpha * A[i, k] * B[k, j] 
+        for k in range(n):
+            A[i, k] *= alpha
+            for j in range(n):
+                temp[i, j] += A[i, k] * B[k, j]
 
+    # 2N^3 + N^2
     for i in range(n):
         for j in range(n):
-            D[i, j] = beta * D[i, j]
+            D[i, j] *= beta
             for k in range(n):
                 D[i, j] += temp[i, k] * C[k, j]
 
@@ -50,99 +57,42 @@ def _2mm_python_0(alpha, beta, A, B, C, D):
 def _2mm_numba_1(alpha, beta, A, B, C, D):
     n = A.shape[0]
     temp = np.zeros((n, n))
-    for i in range(n):
-        for j in range(n):
-            for k in range(n):
-                temp[i, j] += alpha * A[i, k] * B[k, j] 
 
+    # 2N^3 + N^2
+    for i in range(n):
+        for k in range(n):
+            A[i, k] *= alpha
+            for j in range(n):
+                temp[i, j] += A[i, k] * B[k, j]
+
+    # 2N^3 + N^2
     for i in range(n):
         for j in range(n):
-            D[i, j] = beta * D[i, j]
+            D[i, j] *= beta
             for k in range(n):
                 D[i, j] += temp[i, k] * C[k, j]
+
 
 
 # ---------------------------------------------------------
 # Baseline 2: Loop Order Permutations
 # ---------------------------------------------------------
 @njit
-def _2mm_2_ijk(alpha, beta, A, B, C, D):
+def _2mm_ikj_kij_2(alpha, beta, A, B, C, D):
     n = A.shape[0]
     temp = np.zeros((n, n))
-    for i in range(n):
-        for j in range(n):
-            for k in range(n):
-                temp[i, j] += alpha * A[i, k] * B[k, j]
 
-    for i in range(n):
-        for j in range(n):
-            D[i, j] = beta * D[i, j]
-            for k in range(n):
-                D[i, j] += temp[i, k] * C[k, j]
-
-
-@njit
-def _2mm_2_ikj(alpha, beta, A, B, C, D):
-    n = A.shape[0]
-    temp = np.zeros((n, n))
+    # 2N^3 + N^2
     for i in range(n):
         for k in range(n):
+            A[i, k] *= alpha
             for j in range(n):
-                temp[i, j] += alpha * A[i, k] * B[k, j]
+                temp[i, j] += A[i, k] * B[k, j]
 
+    # 2N^3 + N^2. beta stays outside k, which wraps every D[i, j].
     for i in range(n):
         for j in range(n):
-            D[i, j] = beta * D[i, j]
-        for k in range(n):
-            for j in range(n):
-                D[i, j] += temp[i, k] * C[k, j]
-
-
-@njit
-def _2mm_2_jik(alpha, beta, A, B, C, D):
-    n = A.shape[0]
-    temp = np.zeros((n, n))
-    for j in range(n):
-        for i in range(n):
-            for k in range(n):
-                temp[i, j] += alpha * A[i, k] * B[k, j]
-
-    for j in range(n):
-        for i in range(n):
-            D[i, j] = beta * D[i, j]
-            for k in range(n):
-                D[i, j] += temp[i, k] * C[k, j]
-
-
-@njit
-def _2mm_2_jki(alpha, beta, A, B, C, D):
-    n = A.shape[0]
-    temp = np.zeros((n, n))
-    for j in range(n):
-        for k in range(n):
-            for i in range(n):
-                temp[i, j] += alpha * A[i, k] * B[k, j]
-
-    for j in range(n):
-        for i in range(n):
-            D[i, j] = beta * D[i, j]
-        for k in range(n):
-            for i in range(n):
-                D[i, j] += temp[i, k] * C[k, j]
-
-
-@njit
-def _2mm_2_kij(alpha, beta, A, B, C, D):
-    n = A.shape[0]
-    temp = np.zeros((n, n))
-    for k in range(n):
-        for i in range(n):
-            for j in range(n):
-                temp[i, j] += alpha * A[i, k] * B[k, j]
-
-    for i in range(n):
-        for j in range(n):
-            D[i, j] = beta * D[i, j]
+            D[i, j] *= beta
     for k in range(n):
         for i in range(n):
             for j in range(n):
@@ -150,96 +100,219 @@ def _2mm_2_kij(alpha, beta, A, B, C, D):
 
 
 @njit
-def _2mm_2_kji(alpha, beta, A, B, C, D):
+def _2mm_ikj_ikj_2(alpha, beta, A, B, C, D):
     n = A.shape[0]
     temp = np.zeros((n, n))
-    for k in range(n):
-        for j in range(n):
-            for i in range(n):
-                temp[i, j] += alpha * A[i, k] * B[k, j]
 
+    # 2N^3 + N^2
+    for i in range(n):
+        for k in range(n):
+            A[i, k] *= alpha
+            for j in range(n):
+                temp[i, j] += A[i, k] * B[k, j]
+
+    # 2N^3 + N^2
+    for i in range(n):
+        for j in range(n):
+            D[i, j] *= beta
+        for k in range(n):
+            for j in range(n):
+                D[i, j] += temp[i, k] * C[k, j]
+
+
+@njit
+def _2mm_kij_ikj_2(alpha, beta, A, B, C, D):
+    n = A.shape[0]
+    temp = np.zeros((n, n))
+
+    # 2N^3 + N^2
+    for k in range(n):
+        for i in range(n):
+            A[i, k] *= alpha
+            for j in range(n):
+                temp[i, j] += A[i, k] * B[k, j]
+
+    # 2N^3 + N^2
+    for i in range(n):
+        for j in range(n):
+            D[i, j] *= beta
+        for k in range(n):
+            for j in range(n):
+                D[i, j] += temp[i, k] * C[k, j]
+
+
+@njit
+def _2mm_kij_kij_2(alpha, beta, A, B, C, D):
+    n = A.shape[0]
+    temp = np.zeros((n, n))
+
+    # 2N^3 + N^2
+    for k in range(n):
+        for i in range(n):
+            A[i, k] *= alpha
+            for j in range(n):
+                temp[i, j] += A[i, k] * B[k, j]
+
+    # 2N^3 + N^2. beta stays outside k, which wraps every D[i, j].
+    for i in range(n):
+        for j in range(n):
+            D[i, j] *= beta
+    for k in range(n):
+        for i in range(n):
+            for j in range(n):
+                D[i, j] += temp[i, k] * C[k, j]
+
+
+@njit
+def _2mm_ikj_jik_2(alpha, beta, A, B, C, D):
+    n = A.shape[0]
+    temp = np.zeros((n, n))
+
+    # 2N^3 + N^2
+    for i in range(n):
+        for k in range(n):
+            A[i, k] *= alpha
+            for j in range(n):
+                temp[i, j] += A[i, k] * B[k, j]
+
+    # 2N^3 + N^2
     for j in range(n):
         for i in range(n):
-            D[i, j] = beta * D[i, j]
-    for k in range(n):
-        for j in range(n):
-            for i in range(n):
+            D[i, j] *= beta
+            for k in range(n):
                 D[i, j] += temp[i, k] * C[k, j]
+
+
+@njit
+def _2mm_ikj_ijk_2(alpha, beta, A, B, C, D):
+    n = A.shape[0]
+    temp = np.zeros((n, n))
+
+    # 2N^3 + N^2
+    for i in range(n):
+        for k in range(n):
+            A[i, k] *= alpha
+            for j in range(n):
+                temp[i, j] += A[i, k] * B[k, j]
+
+    # 2N^3 + N^2
+    for i in range(n):
+        for j in range(n):
+            D[i, j] *= beta
+            for k in range(n):
+                D[i, j] += temp[i, k] * C[k, j]
+
 
 
 # ---------------------------------------------------------
-# Baseline 3: Optimization Flags for Backend (IKJ order)
+# Baseline 3: loop fusion, ikj
+# ---------------------------------------------------------
+@njit
+def _2mm_fusion_ikj_3(alpha, beta, A, B, C, D):
+    n = A.shape[0]
+    temp_row = np.empty(n, dtype=A.dtype)
+
+    for i in range(n):
+        temp_row[:] = 0
+
+        for k in range(n):
+            A[i, k] *= alpha
+            a = A[i, k]
+
+            for j in range(n):
+                temp_row[j] += a * B[k, j]
+
+
+        for j in range(n):
+            D[i, j] *= beta
+
+        for k in range(n):
+            t = temp_row[k]
+
+            for j in range(n):
+                D[i, j] += t * C[k, j]
+
+
+
+# ---------------------------------------------------------
+# Baseline 4: Optimization Flags for ikj fusion
 # ---------------------------------------------------------
 @njit(fastmath=True)
-def _2mm_opt_flags_3(alpha, beta, A, B, C, D):
+def _2mm_opt_flags_fusion_ikj_4(alpha, beta, A, B, C, D):
     n = A.shape[0]
-    temp = np.zeros((n, n))
-    for i in range(n):
-        for k in range(n):
-            for j in range(n):
-                temp[i, j] += alpha * A[i, k] * B[k, j]
+    temp_row = np.empty(n, dtype=A.dtype)
 
     for i in range(n):
-        for j in range(n):
-            D[i, j] = beta * D[i, j]
+        temp_row[:] = 0
+
+        for k in range(n): #2N^2
+            A[i, k] *= alpha
+            D[i, k] *= beta
+            a = A[i, k]
+
+            for j in range(n): #2N^3
+                temp_row[j] += a * B[k, j]
+
+
         for k in range(n):
-            for j in range(n):
-                D[i, j] += temp[i, k] * C[k, j]
+            t = temp_row[k]
+
+            for j in range(n): #2N^3
+                D[i, j] += t * C[k, j]
+
 
 # ---------------------------------------------------------
-# Baseline 4: Parallel Loop Versions (ikj is the best)
+# Baseline 5: Parallel Loop Versions (ikj is the best)
 # ---------------------------------------------------------
 @njit(parallel=True, fastmath=True)
-def _2mm_parallel_i_4(alpha, beta, A, B, C, D):
+def _2mm_parallel_i_5(alpha, beta, A, B, C, D):
     n = A.shape[0]
     temp = np.zeros((n, n))
     for i in prange(n):
-        for k in range(n):
-            for j in range(n):
-                temp[i, j] += alpha * A[i, k] * B[k, j]
+        for k in prange(n):
+            A[i, k] *= alpha
+            a = A[i, k]
+            for j in prange(n):
+                temp[i, j] += a * B[k, j]
 
     for i in prange(n):
-        for j in range(n):
-            D[i, j] = beta * D[i, j]
-        for k in range(n):
-            for j in range(n):
-                D[i, j] += temp[i, k] * C[k, j]
+        for j in prange(n):
+            D[i, j] *= beta
+        for k in prange(n):
+            t = temp[i, k]
+            for j in prange(n):
+                D[i, j] += t * C[k, j]
 
-def _2mm_parallel_k_4(alpha, beta, A, B, C, D):
+
+@njit(parallel=True, fastmath=True)
+def _2mm_parallel_fusion_ikj_5(alpha, beta, A, B, C, D):
     n = A.shape[0]
-    temp = np.zeros((n, n))
-    for k in range(n):
-        for i in prange(n):
-            for j in range(n):
-                temp[i, j] += alpha * A[i, k] * B[k, j]
 
     for i in prange(n):
-        for j in range(n):
-            D[i, j] = beta * D[i, j]
-    for k in range(n):
-        for i in prange(n):
-            for j in range(n):
-                D[i, j] += temp[i, k] * C[k, j]
+        temp_row = np.empty(n, dtype=A.dtype)
+        temp_row[:] = 0
 
-def _2mm_parallel_j_4(alpha, beta, A, B, C, D):
-    n = A.shape[0]
-    temp = np.zeros((n, n))
-    for j in prange(n):
-        for i in range(n):
-            for k in range(n):
-                temp[i, j] += alpha * A[i, k] * B[k, j]
+        for k in prange(n): #2N^2
+            A[i, k] *= alpha
+            D[i, k] *= beta
+            a = A[i, k]
 
-    for j in prange(n):
-        for i in range(n):
-            D[i, j] = beta * D[i, j]
-            for k in range(n):
-                D[i, j] += temp[i, k] * C[k, j]
+            for j in prange(n): #2N^3
+                temp_row[j] += a * B[k, j]
+            
+
+        for k in prange(n):
+            t = temp_row[k]
+
+            for j in prange(n): #2N^3
+                D[i, j] += t * C[k, j]
+
 
 # ---------------------------------------------------------
-# Baseline 5: Blocked (Tiled) Parallel I Code
+# Baseline 6: Blocked (Tiled) Parallel I Code
 # ---------------------------------------------------------
 @njit(parallel=True, fastmath=True)
-def _2mm_blocked_parallel_5(alpha, beta, A, B, C, D):
+def _2mm_blocked_parallel_6(alpha, beta, A, B, C, D):
     n = A.shape[0]
     bs = BLOCK_SIZE
     temp = np.zeros((n, n))
@@ -252,64 +325,260 @@ def _2mm_blocked_parallel_5(alpha, beta, A, B, C, D):
 
         for k_block in range(0, n, bs):
             k_end = min(k_block + bs, n)
+
+            for i in range(i_block, i_end):
+                for k in range(k_block, k_end):
+                    A[i, k] *= alpha
+
             for j_block in range(0, n, bs):
                 j_end = min(j_block + bs, n)
                 for i in range(i_block, i_end):
                     for k in range(k_block, k_end):
+                        a = A[i, k]
                         for j in range(j_block, j_end):
-                            temp[i, j] += alpha * A[i, k] * B[k, j]
+                            temp[i, j] += a * B[k, j]
          
         for j_block in range(0, n, bs):
             j_end = min(j_block + bs, n)
+
             for i in range(i_block, i_end):
                 for j in range(j_block, j_end):
-                    D[i, j] = beta * D[i, j]
+                    D[i, j] *= beta
         
         for k_block in range(0, n, bs):
             k_end = min(k_block + bs, n)
+
             for j_block in range(0, n, bs):
                 j_end = min(j_block + bs, n)
+
                 for i in range(i_block, i_end):
                     for k in range(k_block, k_end):
+                        t = temp[i, k]
                         for j in range(j_block, j_end):
-                            D[i, j] += temp[i, k] * C[k, j]
+                            D[i, j] += t * C[k, j]
 
-# ---------------------------------------------------------
-# Baseline 6: Blocked Parallel I using np.dot for Sub-blocks
-# ---------------------------------------------------------
 @njit(parallel=True, fastmath=True)
-def _2mm_blocked_np_dot_6(alpha, beta, A, B, C, D):
-    n = A.shape[0]
+def _2mm_parallel_fusion_blocked_6(alpha, beta, A, B, C, D):
     bs = BLOCK_SIZE
-    temp = np.zeros((n, n))
-
+    n = A.shape[0]
     num_i_blocks = (n + bs - 1) // bs
 
     for b in prange(num_i_blocks):
         i_block = b * bs
         i_end = min(i_block + bs, n)
 
-        for k_block in range(0, n, bs):
-            k_end = min(k_block + bs, n)
-            for j_block in range(0, n, bs):
-                j_end = min(j_block + bs, n)
-                temp[i_block:i_end, j_block:j_end] += alpha * np.dot(
-                    A[i_block:i_end, k_block:k_end],
-                    B[k_block:k_end, j_block:j_end],
-                )
+        temp = np.zeros((i_end - i_block, n), dtype=A.dtype)
 
-        for j_block in range(0, n, bs):
-            j_end = min(j_block + bs, n)
-            D[i_block:i_end, j_block:j_end] *= beta
+        for i in range(i_block, i_end):
+            for j in range(n):
+                A[i, j] *= alpha
+                D[i, j] *= beta
 
         for k_block in range(0, n, bs):
             k_end = min(k_block + bs, n)
+
             for j_block in range(0, n, bs):
                 j_end = min(j_block + bs, n)
-                D[i_block:i_end, j_block:j_end] += np.dot(
-                    temp[i_block:i_end, k_block:k_end],
-                    C[k_block:k_end, j_block:j_end],
-                )
+
+                for i in range(i_block, i_end):
+                    for k in range(k_block, k_end):
+                        a = A[i, k]
+
+                        for j in range(j_block, j_end):
+                            temp[i - i_block, j] += a * B[k, j]
+
+
+        for k_block in range(0, n, bs):
+            k_end = min(k_block + bs, n)
+
+            for j_block in range(0, n, bs):
+                j_end = min(j_block + bs, n)
+
+                for i in range(i_block, i_end):
+                    for k in range(k_block, k_end):
+                        t = temp[i - i_block, k]
+
+                        for j in range(j_block, j_end):
+                            D[i, j] += t * C[k, j]
+
+
+# ---------------------------------------------------------
+# Baseline 8: loop unrolling
+# ---------------------------------------------------------
+@njit(parallel=True, fastmath=True)
+def _2mm_loop_unrolling_8(alpha, beta, A, B, C, D):
+    n = A.shape[0]
+    n4 = n - n % 4
+
+    for i in prange(n):
+        temp_row = np.zeros(n, dtype=A.dtype)
+
+        for k in range(0, n4, 4):
+            A[i, k]     *= alpha
+            A[i, k + 1] *= alpha
+            A[i, k + 2] *= alpha
+            A[i, k + 3] *= alpha
+
+            D[i, k]     *= beta
+            D[i, k + 1] *= beta
+            D[i, k + 2] *= beta
+            D[i, k + 3] *= beta
+
+            a0 = A[i, k]
+            a1 = A[i, k + 1]
+            a2 = A[i, k + 2]
+            a3 = A[i, k + 3]
+
+            for j in prange(n):
+                temp_row[j] += a0 * B[k, j]
+                temp_row[j] += a1 * B[k + 1, j]
+                temp_row[j] += a2 * B[k + 2, j]
+                temp_row[j] += a3 * B[k + 3, j]
+
+        # tail
+        for k in range(n4, n):
+            A[i, k] *= alpha
+            D[i, k] *= beta
+            a = A[i, k]
+
+            for j in prange(n):
+                temp_row[j] += a * B[k, j]
+
+
+
+        for k in range(0, n4, 4):
+            t0 = temp_row[k]
+            t1 = temp_row[k + 1]
+            t2 = temp_row[k + 2]
+            t3 = temp_row[k + 3]
+
+            for j in prange(n):
+                D[i, j] += t0 * C[k, j]
+                D[i, j] += t1 * C[k + 1, j]
+                D[i, j] += t2 * C[k + 2, j]
+                D[i, j] += t3 * C[k + 3, j]
+
+        # tail
+        for k in range(n4, n):
+            t = temp_row[k]
+
+            for j in prange(n):
+                D[i, j] += t * C[k, j]
+
+
+# ---------------------------------------------------------
+# Baseline 9: micro kernel 2x2
+# ---------------------------------------------------------
+@njit(parallel=True, fastmath=True)
+def _2mm_micro_kernel_2x2_9(alpha, beta, A, B, C, D):
+    n = A.shape[0]
+
+    if n == 0 or n % 2 != 0:
+        raise ValueError("This version requires a positive even n.")
+
+
+    for row_pair in prange(n // 2):
+        i = row_pair * 2
+
+        temp = np.empty((2, n), dtype=A.dtype)
+
+        for j in prange(n):
+            A[i, j]     *= alpha
+            A[i + 1, j] *= alpha
+
+            D[i, j]     *= beta
+            D[i + 1, j] *= beta
+
+
+        for j in range(0, n, 2):
+            a0 = A[i, 0]
+            a1 = A[i + 1, 0]
+            b0 = B[0, j]
+            b1 = B[0, j + 1]
+
+            c00 = a0 * b0
+            c01 = a0 * b1
+            c10 = a1 * b0
+            c11 = a1 * b1
+
+            for k in range(1, n):
+                a0 = A[i, k]
+                a1 = A[i + 1, k]
+                b0 = B[k, j]
+                b1 = B[k, j + 1]
+
+                c00 += a0 * b0
+                c01 += a0 * b1
+                c10 += a1 * b0
+                c11 += a1 * b1
+
+            temp[0, j]     = c00
+            temp[0, j + 1] = c01
+            temp[1, j]     = c10
+            temp[1, j + 1] = c11
+
+    
+
+        for j in range(0, n, 2):
+            c00 = D[i, j]
+            c01 = D[i, j + 1]
+            c10 = D[i + 1, j]
+            c11 = D[i + 1, j + 1]
+
+            for k in range(n):
+                t0 = temp[0, k]
+                t1 = temp[1, k]
+                b0 = C[k, j]
+                b1 = C[k, j + 1]
+
+                c00 += t0 * b0
+                c01 += t0 * b1
+                c10 += t1 * b0
+                c11 += t1 * b1
+
+            D[i, j]     = c00
+            D[i, j + 1] = c01
+            D[i + 1, j]     = c10
+            D[i + 1, j + 1] = c11
+
+
+
+# # ---------------------------------------------------------
+# # Baseline 7: Blocked Parallel I using np.dot for Sub-blocks
+# # ---------------------------------------------------------
+# @njit(parallel=True, fastmath=True)
+# def _2mm_blocked_np_dot_7(alpha, beta, A, B, C, D):
+#     n = A.shape[0]
+#     bs = BLOCK_SIZE
+#     temp = np.zeros((n, n))
+
+#     num_i_blocks = (n + bs - 1) // bs
+
+#     for b in prange(num_i_blocks):
+#         i_block = b * bs
+#         i_end = min(i_block + bs, n)
+
+#         for k_block in range(0, n, bs):
+#             k_end = min(k_block + bs, n)
+#             for j_block in range(0, n, bs):
+#                 j_end = min(j_block + bs, n)
+#                 temp[i_block:i_end, j_block:j_end] += alpha * np.dot(
+#                     A[i_block:i_end, k_block:k_end],
+#                     B[k_block:k_end, j_block:j_end],
+#                 )
+
+#         for j_block in range(0, n, bs):
+#             j_end = min(j_block + bs, n)
+#             D[i_block:i_end, j_block:j_end] *= beta
+
+#         for k_block in range(0, n, bs):
+#             k_end = min(k_block + bs, n)
+#             for j_block in range(0, n, bs):
+#                 j_end = min(j_block + bs, n)
+#                 D[i_block:i_end, j_block:j_end] += np.dot(
+#                     temp[i_block:i_end, k_block:k_end],
+#                     C[k_block:k_end, j_block:j_end],
+#                 )
                 
 
 # ---------------------------------------------------------
@@ -485,133 +754,67 @@ def _2mm_blocked_zero_alloc_9(alpha, beta, A, B, C, D):
 
 
 # ---------------------------------------------------------
-# Baseline 10: Reference NumPy dot
+# Baseline 10: Reference NumPy dot and BLAS
 # ---------------------------------------------------------
 def _2mm_np_dot_10(alpha, beta, A, B, C, D):
     np.copyto(D, alpha * np.dot(np.dot(A, B), C) + beta * D)
 
+def _2mm_np_matmul_10(alpha, beta, A, B, C, D):
+    A *= alpha
+    D *= beta
+    D += (A @ B) @ C
+
 
 # ---------------------------------------------------------
-# Baselines 11-15: same np.dot kernel, pinned to P-cores or E-cores.
-# One logical processor is used per physical core, so a P-core's
-# use AI to discover the below
+# Baseline 11: BLAS with block
 # ---------------------------------------------------------
-class _SYSTEM_CPU_SET_INFORMATION(ctypes.Structure):
-    _fields_ = [
-        ("Size", wintypes.DWORD),
-        ("Type", wintypes.DWORD),
-        ("Id", wintypes.DWORD),
-        ("Group", wintypes.WORD),
-        ("LogicalProcessorIndex", ctypes.c_ubyte),
-        ("CoreIndex", ctypes.c_ubyte),
-        ("LastLevelCacheIndex", ctypes.c_ubyte),
-        ("NumaNodeIndex", ctypes.c_ubyte),
-        ("EfficiencyClass", ctypes.c_ubyte),
-        ("AllFlags", ctypes.c_ubyte),
-        ("SchedulingClass", wintypes.DWORD),
-        ("AllocationTag", ctypes.c_ulonglong),
-    ]
+@njit(parallel=True, fastmath=True)
+def _2mm_np_dot_block_11(alpha, beta, A, B, C, D):
+    mr = BLOCK_SIZE
+    n = A.shape[0]
+    for task in prange((n + mr - 1) // mr):
+        i0 = task * mr
+        i1 = min(i0 + mr, n)
+        h = i1 - i0
+        tmp = np.empty((h, n), dtype=A.dtype)
+        out = np.empty((h, n), dtype=D.dtype)
+
+        for i in prange(i0, i1):
+            for j in prange(n):
+                A[i, j] *= alpha
+
+        temp = A[i0:i1] @ B
+        out = temp @ C
+
+        for i in prange(i0, i1):
+            for j in prange(n):
+                D[i, j] = beta * D[i, j] + out[i - i0, j]
 
 
-_kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-_kernel32.GetCurrentProcess.restype = wintypes.HANDLE
-_kernel32.GetProcessAffinityMask.argtypes = [
-    wintypes.HANDLE,
-    ctypes.POINTER(ctypes.c_size_t),
-    ctypes.POINTER(ctypes.c_size_t),
-]
-_kernel32.GetProcessAffinityMask.restype = wintypes.BOOL
-_kernel32.SetProcessAffinityMask.argtypes = [wintypes.HANDLE, ctypes.c_size_t]
-_kernel32.SetProcessAffinityMask.restype = wintypes.BOOL
-_kernel32.GetSystemCpuSetInformation.argtypes = [
-    ctypes.c_void_p,
-    wintypes.ULONG,
-    ctypes.POINTER(wintypes.ULONG),
-    wintypes.HANDLE,
-    wintypes.ULONG,
-]
-_kernel32.GetSystemCpuSetInformation.restype = wintypes.BOOL
+
+@njit(parallel=True, fastmath=True)
+def _2mm_np_matmul_block_11(alpha, beta, A, B, C, D):
+    mr = BLOCK_SIZE
+    n = A.shape[0]
+    for task in prange((n + mr - 1) // mr):
+        i0 = task * mr
+        i1 = min(i0 + mr, n)
+        h = i1 - i0
+        tmp = np.empty((h, n), dtype=A.dtype)
+        out = np.empty((h, n), dtype=D.dtype)
+
+        for i in prange(i0, i1):
+            for j in prange(n):
+                A[i, j] *= alpha
+
+        np.dot(A[i0:i1], B, tmp)
+        np.dot(tmp, C, out)
+
+        for i in prange(i0, i1):
+            for j in prange(n):
+                D[i, j] = beta * D[i, j] + out[i - i0, j]
 
 
-def _logical_processors_by_efficiency():
-    """Return one logical processor id per physical core, grouped by efficiency class."""
-    needed = wintypes.ULONG(0)
-    _kernel32.GetSystemCpuSetInformation(None, 0, ctypes.byref(needed), None, 0)
-    buf = ctypes.create_string_buffer(needed.value)
-    if not _kernel32.GetSystemCpuSetInformation(buf, needed.value, ctypes.byref(needed), None, 0):
-        raise ctypes.WinError(ctypes.get_last_error())
-
-    cores = {}
-    offset = 0
-    raw = buf.raw
-    rec_size = ctypes.sizeof(_SYSTEM_CPU_SET_INFORMATION)
-    while offset + 8 <= len(raw):
-        size = int.from_bytes(raw[offset:offset + 4], "little")
-        if size < rec_size:
-            break
-        rec = _SYSTEM_CPU_SET_INFORMATION.from_buffer_copy(raw[offset:offset + rec_size])
-        cores.setdefault(rec.EfficiencyClass, {}).setdefault(rec.CoreIndex, []).append(
-            rec.LogicalProcessorIndex
-        )
-        offset += size
-
-    if len(cores) < 2:
-        raise RuntimeError("This CPU does not expose separate P-core and E-core classes")
-
-    def one_thread_per_core(class_id):
-        return [min(cores[class_id][core]) for core in sorted(cores[class_id])]
-
-    p_class = max(cores)
-    e_class = min(cores)
-    return one_thread_per_core(p_class), one_thread_per_core(e_class)
-
-
-_P_LOGICAL, _E_LOGICAL = _logical_processors_by_efficiency()
-
-
-def _select_cores(pool, count, kind):
-    if len(pool) < count:
-        raise RuntimeError(f"Need {count} {kind} cores, found {len(pool)}")
-    return pool[:count]
-
-
-def _2mm_np_dot_on_cores(alpha, beta, A, B, C, D, logical_ids):
-    mask = 0
-    for lp in logical_ids:
-        mask |= 1 << int(lp)
-
-    handle = _kernel32.GetCurrentProcess()
-    previous = ctypes.c_size_t()
-    system = ctypes.c_size_t()
-    if not _kernel32.GetProcessAffinityMask(handle, ctypes.byref(previous), ctypes.byref(system)):
-        raise ctypes.WinError(ctypes.get_last_error())
-    if not _kernel32.SetProcessAffinityMask(handle, ctypes.c_size_t(mask)):
-        raise ctypes.WinError(ctypes.get_last_error())
-    try:
-        with threadpool_limits(limits=len(logical_ids), user_api="blas"):
-            np.copyto(D, alpha * np.dot(np.dot(A, B), C) + beta * D)
-    finally:
-        _kernel32.SetProcessAffinityMask(handle, previous)
-
-
-def _2mm_6_pcores_11(alpha, beta, A, B, C, D):
-    _2mm_np_dot_on_cores(alpha, beta, A, B, C, D, _select_cores(_P_LOGICAL, 6, "P"))
-
-
-def _2mm_4_pcores_12(alpha, beta, A, B, C, D):
-    _2mm_np_dot_on_cores(alpha, beta, A, B, C, D, _select_cores(_P_LOGICAL, 4, "P"))
-
-
-def _2mm_1_pcore_13(alpha, beta, A, B, C, D):
-    _2mm_np_dot_on_cores(alpha, beta, A, B, C, D, _select_cores(_P_LOGICAL, 1, "P"))
-
-
-def _2mm_4_ecores_14(alpha, beta, A, B, C, D):
-    _2mm_np_dot_on_cores(alpha, beta, A, B, C, D, _select_cores(_E_LOGICAL, 4, "E"))
-
-
-def _2mm_1_ecore_15(alpha, beta, A, B, C, D):
-    _2mm_np_dot_on_cores(alpha, beta, A, B, C, D, _select_cores(_E_LOGICAL, 1, "E"))
 
 
 # ---------------------------------------------------------
@@ -629,24 +832,29 @@ def run_benchmark(matrix_size=512):
     C = np.random.randn(N, N).astype(np.float64)
     D = np.random.randn(N, N).astype(np.float64)
 
+    A_org = A.copy()
     D_org = D.copy()
 
     # Compute ground truth reference solution for correctness verification
     D_expected = alpha * np.dot(np.dot(A, B), C) + beta * D
-    total_flops = 5.0 * (N ** 3) + (N ** 2) # 3N^3 (for alpha * A * B), N^2 (for beta * D), 2N^3 (for temp * C)
+    total_flops = 4.0 * (N ** 3) + 2.0 * (N ** 2) # 4N^3 + 2N^2
 
     def measure(fn, warmup=True, reps=9):
         if warmup:
+            A[:] = A_org
             D[:] = D_org
             fn(alpha, beta, A, B, C, D)
 
-        # Correctness check against reference matrix C_expected
+        # Correctness check against reference matrix D_expected.
+        # A is restored as well: some kernels scale it in place.
+        A[:] = A_org
         D[:] = D_org
         fn(alpha, beta, A, B, C, D)
         is_correct = np.allclose(D, D_expected, rtol=1e-5, atol=1e-5)
 
         start = time.perf_counter()
         for _ in range(reps):
+            A[:] = A_org
             D[:] = D_org
             fn(alpha, beta, A, B, C, D)
         elapsed = (time.perf_counter() - start) / reps
@@ -672,27 +880,24 @@ def run_benchmark(matrix_size=512):
     # Baseline functions list
     functions = [
         ("1_numba_naive", _2mm_numba_1),
-        ("2_order_ijk", _2mm_2_ijk),
-        ("2_order_ikj", _2mm_2_ikj),
-        ("2_order_jik", _2mm_2_jik),
-        ("2_order_jki", _2mm_2_jki),
-        ("2_order_kij", _2mm_2_kij),
-        ("2_order_kji", _2mm_2_kji),
-        ("3_fastmath_ikj", _2mm_opt_flags_3),
-        ("4_parallel_i", _2mm_parallel_i_4),
-        #("4_parallel_k", _2mm_parallel_k_4),
-        #("4_parallel_j", _2mm_parallel_j_4),
-        ("5_blocked_parallel_i", _2mm_blocked_parallel_5),
-        ("6_blocked_np_dot", _2mm_blocked_np_dot_6),
-        ("7_blocked_temp_copy", _2mm_blocked_temp_copy_7),
-        ("8_two_level_blocked_temp_np_dot", _2mm_two_level_blocked_temp_np_dot_8),
-        ("9_blocked_zero_alloc", _2mm_blocked_zero_alloc_9),
+        ("2_ikj_kij", _2mm_ikj_kij_2),
+        ("2_ikj_ikj", _2mm_ikj_ikj_2),
+        ("2_kij_ikj", _2mm_kij_ikj_2),
+        ("2_kij_kij", _2mm_kij_kij_2),
+        ("2_ikj_jik", _2mm_ikj_jik_2),
+        ("2_ikj_ijk", _2mm_ikj_ijk_2),
+        ("3_fusion_ikj", _2mm_fusion_ikj_3),
+        ("4_opt_flags_fusion_ikj", _2mm_opt_flags_fusion_ikj_4),
+        ("5_parallel_i", _2mm_parallel_i_5),
+        ("5_parallel_fusion_ikj", _2mm_parallel_fusion_ikj_5),
+        ("6_blocked_parallel_i",_2mm_blocked_parallel_6),
+        ("6_blocked_parallel_fusion_ikj", _2mm_parallel_fusion_blocked_6),
+        ("8_loop_unrolling", _2mm_loop_unrolling_8),
+        ("9_micro_kernel_2x2", _2mm_micro_kernel_2x2_9),
         ("10_np_dot", _2mm_np_dot_10),
-        ("11_6_pcores", _2mm_6_pcores_11),
-        ("12_4_pcores", _2mm_4_pcores_12),
-        ("13_1_pcore", _2mm_1_pcore_13),
-        ("14_4_ecores", _2mm_4_ecores_14),
-        ("15_1_ecore", _2mm_1_ecore_15),
+        ("10_np_matmul", _2mm_np_matmul_10),
+        ("11_np_dot_block", _2mm_np_dot_block_11),
+        ("11_np_matmul_block", _2mm_np_matmul_block_11),
     ]
 
     for name, fn in functions:
